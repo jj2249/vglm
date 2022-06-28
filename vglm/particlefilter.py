@@ -1,6 +1,6 @@
 import numpy as np
 import copy
-from src.process import GammaProcess, LangevinModel
+from vglm.process import GammaProcess, LangevinModel
 import pandas as pd
 from tqdm import tqdm
 
@@ -36,7 +36,7 @@ class LangevinParticle(LangevinModel):
 	"""
 	Underlying particle object in the particle filter
 	"""
-	def __init__(self, mux, mumu, beta, kw, kv, kmu, rho, eta, theta, p, initial_observation):
+	def __init__(self, mux, muxdot, mumu, beta, kw, kv, kmu, rho, eta, theta, p, initial_observation):
 		# model parameters
 		self.theta = theta
 		self.kv = kv
@@ -44,37 +44,29 @@ class LangevinParticle(LangevinModel):
 		self.beta = beta
 		self.rho = rho
 		self.eta = eta
-		
-		# # implementation parameters
-		# self.gsamps = gsamps
 
 		# initial kalman parameters -- also form the prior distribution
 		# a current current
 		# C current current
-		self.acc = np.array([mux, 0., mumu]).reshape(-1, 1)
+		self.acc = np.array([mux, muxdot, mumu]).reshape(-1, 1)
 		self.Ccc = kw*np.eye(3)
 
 		Cc = np.linalg.cholesky(self.Ccc)
 
+		# sample state
 		self.acc = self.acc + (Cc @ np.random.randn(3)).reshape(-1, 1)
-		# LangevinModel.__init__(self, initial_state[0], initial_state[1], initial_state[2], 1., beta, kv, kmu, theta, gsamps)
 		LangevinModel.__init__(self, self.acc[0,0], self.acc[1,0], self.acc[2,0], 1., beta, kv, kmu, theta, p)
-		# sample initial state using cholesky decomposition
-		# Cc = np.linalg.cholesky(self.Ccc + 1e-12*np.eye(3))
-		# self.alpha = self.acc + Cc @ np.random.randn(3)
 
 		# log particle weight
 		self.Hmat = self.H_matrix()
 		self.Bmat = self.B_matrix()
-		# self.logweight = self.get_initial_weight(initial_observation)
 		self.logweight = 0.
 		self.E = 0.
 		self.count = 0.
 
 
 	def __repr__(self):
-		return str(#"alpha: "+self.alpha.__repr__()+'\n'
-			"acc: "+self.acc.__repr__()+'\n'
+		return str("acc: "+self.acc.__repr__()+'\n'
 			+"Ccc: "+self.Ccc.__repr__()+'\n'
 			+"Un-normalised weight: "+str(np.exp(self.logweight))
 			)
@@ -87,7 +79,7 @@ class LangevinParticle(LangevinModel):
 		Z = GammaProcess(1., self.beta, minT=s, maxT=t)
 		Z.generate()
 
-		# parameters for estimating stochastic integral
+		# parameters for estimating stochastic integral - truncate if increment is too small to sample
 		try:
 			S = self.langevin_S(t, self.theta, Z)
 			_ = np.linalg.cholesky(S)
@@ -109,20 +101,17 @@ class LangevinParticle(LangevinModel):
 		self.count += 1
 		ayt = (self.Hmat @ self.acp).item()
 		Cyt = ((self.Hmat @ self.Ccp @ self.Hmat.T) + self.kv).item()
-		# print(ayt, Cyt)
 		prevE = self.E
 		self.E += np.square(observation - ayt)/Cyt
 		return ((-0.5*np.log(Cyt)) - (self.rho + (self.count/2.))*np.log(self.eta + self.E/2) + (self.rho + ((self.count-1.)/2.))*np.log(self.eta + prevE/2.)).item()
 	
 
 	def update_weight(self, observation):
-		# self.logweight += self.log_ped(observation)
 		self.logweight += self.log_weight_update(observation)
 
 
 	def correct(self, observation):
 		# Kalman gain
-		# K = (Ccp @ self.Hmat.T) / ((self.Hmat @ Ccp @ self.Hmat.T) + self.sigmasq*self.kv)
 		K = (self.Ccp @ self.Hmat.T) / ((self.Hmat @ self.Ccp @ self.Hmat.T) + self.kv)
 		K = K.reshape(-1, 1)
 
@@ -149,11 +138,9 @@ class RBPF:
 	"""
 	Full rao-blackwellised (marginalised) particle filter
 	"""
-	def __init__(self, mux, mumu, beta, kw, kv, kmu, rho, eta, theta, p, data, N, epsilon):
+	def __init__(self, mux, muxdot, mumu, beta, kw, kv, kmu, rho, eta, theta, p, data, N, epsilon):
 
 		# x and y values for the timeseries
-		# self.times = data['Telapsed']
-		# self.prices = data['Price']
 		self.times = data['DateTime']
 		self.prices = data['Bid']
 		self.nobservations = self.times.shape[0]
@@ -166,13 +153,13 @@ class RBPF:
 		self.prev_price = 0.
 		self.current_time = next(self.timegen)
 		self.current_price = next(self.pricegen)
+
 		# implementation parameters
 		# no. of particles
 		self.N = N
 		# limit for resampling based on effective sample size
 		self.log_resample_limit = np.log(self.N*epsilon)
 		self.log_marginal_likelihood = 0.
-		# self.logF = 0.
 
 		self.theta = theta
 		self.beta = beta
@@ -183,10 +170,11 @@ class RBPF:
 		self.p = p
 
 		self.mux = mux
+		self.muxdot = muxdot
 		self.mumu = mumu
 
 		# collection of particles
-		self.particles = [LangevinParticle(mux, mumu, beta, kw, kv, kmu, rho, eta, theta, p, self.current_price) for _ in range(N)]
+		self.particles = [LangevinParticle(mux, muxdot, mumu, beta, kw, kv, kmu, rho, eta, theta, p, self.current_price) for _ in range(N)]
 		self.normalise_weights()
 	
 
@@ -230,7 +218,6 @@ class RBPF:
 		"""
 		Resample particles using multinomial distribution, then set weights to 1/N
 		"""
-
 		lweights = np.array([particle.logweight for particle in self.particles]).flatten()
 		# normalised weights are the probabilities
 		weights = np.exp(lweights)
@@ -284,7 +271,6 @@ class RBPF:
 
 		eXXt = np.array([particle.Ccc + (particle.acc @ particle.acc.T) for particle in self.particles])
 
-		# return msum, (np.sum(weights*eXXt, axis=0) - (msum @ msum.T))
 		return msum, logsumexp(lweights, lambda x : x, eXXt, axis=0, retlog=False) - msum @ msum.T
 
 
@@ -317,14 +303,6 @@ class RBPF:
 		"""
 		lweights = np.array([particle.logweight for particle in self.particles])
 		return -np.max(lweights)
-
-
-	# def get_log_predictive_likelihood(self):
-	# 	"""
-	# 	Sum of predictive weights gives the log likelihood
-	# 	"""
-	# 	lweights = np.array([particle.logweight for particle in self.particles])
-	# 	return logsumexp(lweights, lambda x : 1., np.ones(lweights.shape[0]), retlog=True)
 
 
 	def sigma_posterior(self, x, count, E):
@@ -399,20 +377,12 @@ class RBPF:
 
 			if sample:
 				smean, svar = self.get_state_posterior()
-				# try:
-					# chol = np.linalg.cholesky(svar)
-				# except np.linalg.LinAlgError:
-					# print(svar)
-					# chol = np.linalg.cholesky(svar + 1e-10*np.eye(3))
 				chol = np.linalg.cholesky(svar)
 				state_samp.append(smean + chol @ np.random.randn(3).reshape(-1, 1))
 		if ret_history and tpred>0.:
 			self.times = self.times.tolist()
 			self.times.append(self.prev_time+tpred)
 			self.predict_particles(self.prev_time, tpred)
-
-			# smean = self.get_state_mean_pred()
-			# svar = self.get_state_covariance_pred()
 			smean, svar = self.get_state_posterior_predictive()
 
 			state_means.append(smean[0, 0])
@@ -425,7 +395,6 @@ class RBPF:
 			mu_variances.append(svar[2, 2])
 
 		if plot_marginal and ret_history:
-			# weights = np.array([np.exp(particle.logweight) for particle in self.particles])
 			lweights = np.array([particle.logweight for particle in self.particles])
 			Es = np.array([particle.E for particle in self.particles])
 			count = int(self.particles[0].count)
@@ -539,7 +508,6 @@ class RBPF:
 
 		predtimes = self.times.tolist()[:-npred]
 		predtimes.append(self.times.iloc[-1])
-		# print(predtimes)
 		self.predict_particles(self.prev_time, predtimes[-1]-self.prev_time)
 		curr_states = np.array([particle.acp[0,0] for particle in self.particles])
 		states[-1, :] = curr_states

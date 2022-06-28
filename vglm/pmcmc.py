@@ -1,25 +1,22 @@
 import numpy as np
-from src.particlefilter import RBPF
+from vglm.particlefilter import RBPF
 from tqdm import tqdm
 import sys
 
 
 class PMMH:
-	def __init__(self, mux, mumu, kw, kv, rho, eta, data, N, epsilon, delta, sampleX=False):
-		# initial parameter vector -- beta, theta, kv
-		# self.phi = np.array([10., -10.])
-		# self.phi = np.array([10.*np.random.rand()+0.01, -10.*np.random.rand()-0.01])
-		## lphi = {log (beta), log (-theta)}
+	def __init__(self, mux, mumu, kw, kv, kmu, rho, eta, p, data, N, epsilon, delta, sampleX=False):
+		# initial parameter vector -- beta, theta
 		self.lphi = np.log(np.array([10.*np.random.rand()+1e-3, 10.*np.random.rand()+1e-3]))
 		# RBPF parameters
 		self.mux = mux
 		self.mumu = mumu
 		self.kw = kw
 		self.kv = kv
-		self.kmu = 0.
+		self.kmu = kmu
 		self.rho = rho
 		self.eta = eta
-		self.p = 0.
+		self.p = p
 		self.data = data
 		self.N = N
 		self.epsilon = epsilon
@@ -33,20 +30,20 @@ class PMMH:
 		else:
 			self.lml = rbpf.run_filter()
 
-		# scaling for the Gaussian Random walk
+		# initial scaling for the Gaussian Random walk
 		self.GRW = np.linalg.cholesky(delta*np.eye(2))
-		# self.GRW = np.linalg.cholesky(np.array([[0.001, 0.],[0., 0.001]]))
 
 		self.lphis = [self.lphi]
 		if sampleX:
 			self.Xs = [self.X]
 		self.sampleX = sampleX
 
-	def run_sampler(self, nits, tuning_interval=100.):
+	def run_sampler(self, nits, tuning_interval=100):
 		accs = 0
 		cnt = 0
 		temp_accs = 0
 		steps_before_tune = tuning_interval
+
 		for _ in tqdm(range(nits)):
 			lphistar = self.lphi - ((self.delta**2)/2.) + self.GRW @ np.random.randn(2) ## make lognormal
 			if lphistar[0] > -6.89: ## constrains beta to be greater than ~1e-3 by immediate rejection

@@ -124,7 +124,6 @@ class GammaProcess(JumpProcess):
 		elif gsamps > 10000:
 			gsamps = 10000
 			print('Warning ---> beta too low for a good approximation')
-		# print(gsamps)
 		JumpProcess.__init__(self, samps=gsamps, minT=minT, maxT=maxT)
 
 		# parameters for rejection sampling (directly from levy measure)
@@ -277,23 +276,24 @@ class LangevinModel:
 		"""
 		State transition matrix constructor -- depends on non-linear part of the state (W)
 		"""
-		# num = np.random.rand()
 		A = np.block([[self.langevin_drift(dt, self.theta), m],
 						[np.zeros((1, 2)), 1.]])
-		return A
-		# if num < self.p:
-		# 	A[1,1] = 0.
-		# 	return A
-		# else:
-		# 	return A
+		if self.p > 0.:
+			num = np.random.rand()
+			if num < self.p:
+				A[1,1] = 0.
+				return A
+		else:
+			return A
+
 
 	def B_matrix(self):
 		"""
 		Noise matrix in state space model
 		"""
-		return np.vstack([np.eye(2),
-						np.zeros((1, 2))])
-		# return np.eye(3)
+		# return np.vstack([np.eye(2),
+						# np.zeros((1, 2))])
+		return np.eye(3)
 
 
 	def H_matrix(self):
@@ -358,7 +358,7 @@ class LangevinModel:
 			Cec = np.linalg.cholesky(Ce)
 			e = Cec @ np.random.randn(2)
 		except np.linalg.LinAlgError:
-			# print('Truncating innovation to zero, dt = ' + str(self.t-self.s))
+			# truncate innovation to zero if the increment is too small for Cholesky decomposition
 			e = np.zeros(2)
 
 		# extended state transition matrix
@@ -402,4 +402,3 @@ class LangevinModel:
 		self.observationvals = np.array(self.observationvals)
 		self.observationgrad = np.array(self.observationgrad)
 		self.observationmus = np.array(self.observationmus)
-
